@@ -24,7 +24,7 @@ double percentile(const std::vector<int> &v, double q)
 {
 	double point = lerp(q, -0.5, v.size() - 0.5);
 	int left = std::max(unsigned int(std::floor(point)), unsigned int(0));
-	int right = std::min(unsigned int(std::ceil(point)), v.size() - 1);
+	int right = std::min(unsigned int(std::ceil(point)), unsigned int(v.size() - 1));
 
 	int dataLeft = v.at(left);
 	int dataRight = v.at(right);
@@ -38,7 +38,7 @@ int main()
 
 	if ((fd = open("input_file.txt", O_RDONLY)) == -1)
 	{
-		std::cout << "Error";
+		std::cerr << "File opening error: " << strerror(errno) << "\n";
 		exit(1); // вообще, не совсем уверен, как обрабатываются ошибки
 	}
 
@@ -77,7 +77,7 @@ int main()
 
 	if (close(fd) < 0)
 	{
-		std::cout << "Error";
+		std::cerr << "File closing error: " << strerror(errno) << "\n";
 		exit(1);
 	};
 
