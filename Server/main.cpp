@@ -1,21 +1,11 @@
-/*Немного общих ощущений от полученного результата:
-оно вроде работает, а насколько это то, что нужно, я без понятия)
-Немного смущает факт того, что для точного расчёта перцентелей нужно работать со всей выборкой.
-
-Заменил вектор на мультисет - общая скорость выполнения чуть больше 50-ти секунд.
-
-Насколько мне известно, существуют методы примерного расчёта перцентелей как раз таки для случаев
-постепенного получения объектов. Но я, если честно, пока что не копал в этом направлении вообще.
-Результат работы совпал со значениями, полученными в Экселе.*/
-
 #include <iostream>
-#include <io.h>
+#include <string.h>
 #include <fcntl.h>
+#include <unistd.h>
 #include <set>
 #include <algorithm>
+#include <cmath>
 
-// 2 функции для расчёта перцентилей. Честно найдено на просторах Интернета.
-// Автор заявил, что это алгоритм, используемый в МатЛабе
 double lerp(double t, double v0, double v1)
 {
 	return (1 - t)*v0 + t*v1;
@@ -24,8 +14,8 @@ double lerp(double t, double v0, double v1)
 double percentile(const std::multiset<int> &s, double q)
 {
 	double point = lerp(q, -0.5, s.size() - 0.5);
-	int left = std::max(unsigned int(std::floor(point)), unsigned int(0));
-	int right = std::min(unsigned int(std::ceil(point)), unsigned int(s.size() - 1));
+    int left = std::max(int(std::floor(point)), 0);
+    int right = std::min(int(std::ceil(point)), int(s.size() - 1));
 
 	int dataLeft = *std::next(s.begin(), left);
 	int dataRight = *std::next(s.begin(), right);
@@ -40,35 +30,35 @@ int main()
 	if ((fd = open("input_file.txt", O_RDONLY)) == -1)
 	{
 		std::cerr << "File opening error: " << strerror(errno) << "\n";
-		exit(1); // вообще, не совсем уверен, как обрабатываются ошибки
+                exit(1);
 	}
 
-	char buffer[10]; // 10 - более, чем достаточно
-	int bytes_read;
+    char buffer[10];
+    ssize_t bytes_read;
 	char t;
 	int tabs = 0;
 	int i = 0;
 
 	std::multiset<int> data;
 
-	while ((bytes_read = read(fd, &t, 1)) > 0) // читаю по байту
+        while ((bytes_read = read(fd, &t, 1)) > 0)
 	{
-		if (t == '\t') // считаю табуляции, чтобы дойти до нужной колонки
+                if (t == '\t')
 		{
 			++tabs;
 			continue;
 		}
-		if (t == '\n') // конец строки
+                if (t == '\n')
 		{
-			buffer[i] = '\0'; // для того, чтобы использовать atoi()
+                        buffer[i] = '\0';
 			int val = atoi(buffer);
-			if (val) // если мы получили 0, то это явно не время обработки транзакции. Это значение нам не нужно
-				data.insert(atoi(buffer)); // иначе это наше время обработки
+                        if (val)
+                                data.insert(atoi(buffer));
 			tabs = 0;
 			i = 0;
 			continue;
 		}
-		if (tabs == 15) // перед нужной колонкой ровно 15 табуляций
+                if (tabs == 15)
 		{
 			buffer[i] = t;
 			++i;
@@ -81,7 +71,6 @@ int main()
 		exit(1);
 	};
 
-	// имя ивента пока не выводил. Я так понял там для каждого вида ивента, нужно будет вести свой учёт
 	std::cout << "min=" << *(data.begin()) << " 50%=" << percentile(data, 0.5) << " 90%=" << percentile(data, 0.9) << " 99%=" << percentile(data, 0.99) << " 99.9%=" << percentile(data, 0.999) << "\n";
 
 //	data.clear();
