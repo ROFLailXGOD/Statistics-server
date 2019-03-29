@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cmath>
 
+const int buff_size = 4096;
+
 double lerp(double t, double v0, double v1)
 {
 	return (1 - t)*v0 + t*v1;
@@ -33,36 +35,39 @@ int main()
                 exit(1);
 	}
 
-    char buffer[10];
+    char numbuffer[10];
     ssize_t bytes_read;
-	char t;
+    char buffer[buff_size];
 	int tabs = 0;
 	int i = 0;
 
 	std::multiset<int> data;
 
-        while ((bytes_read = read(fd, &t, 1)) > 0)
+    while ((bytes_read = read(fd, buffer, buff_size)) > 0)
 	{
-                if (t == '\t')
-		{
-			++tabs;
-			continue;
-		}
-                if (t == '\n')
-		{
-                        buffer[i] = '\0';
-			int val = atoi(buffer);
-                        if (val)
-                                data.insert(atoi(buffer));
-			tabs = 0;
-			i = 0;
-			continue;
-		}
-                if (tabs == 15)
-		{
-			buffer[i] = t;
-			++i;
-		}
+        for (int j = 0; j < bytes_read; ++j)
+        {
+            if (buffer[j] == '\t')
+            {
+                ++tabs;
+                continue;
+            }
+            if (buffer[j] == '\n')
+            {
+                numbuffer[i] = '\0';
+                int val = atoi(numbuffer);
+                if (val)
+                    data.insert(atoi(numbuffer));
+                tabs = 0;
+                i = 0;
+                continue;
+            }
+            if (tabs == 15)
+            {
+                numbuffer[i] = buffer[j];
+                ++i;
+            }
+        }
 	}
 
 	if (close(fd) < 0)
