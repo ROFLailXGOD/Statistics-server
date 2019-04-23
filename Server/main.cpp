@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <set>
+#include <map>
 #include <algorithm>
 #include <cmath>
 #include <sys/socket.h>
@@ -13,10 +14,10 @@
 #include <signal.h>
 #include <mutex>
 
-std::mutex w_lock;
+std::recursive_mutex w_lock;
 
 const int buff_size = 4096;
-static std::multiset<int> data;
+static std::map< std::string, std::multiset<int> > data;
 
 void readfd(int fd);
 double lerp(double t, double v0, double v1)
@@ -24,14 +25,14 @@ double lerp(double t, double v0, double v1)
 	return (1 - t)*v0 + t*v1;
 }
 
-double percentile(double q)
+double percentile(std::string ev, double q)
 {
-    double point = lerp(q, -0.5, data.size() - 0.5);
+    double point = lerp(q, -0.5, data[ev].size() - 0.5);
     int left = std::max(int(std::floor(point)), 0);
-    int right = std::min(int(std::ceil(point)), int(data.size() - 1));
+    int right = std::min(int(std::ceil(point)), int(data[ev].size() - 1));
 
-    int dataLeft = *std::next(data.begin(), left);
-    int dataRight = *std::next(data.begin(), right);
+    int dataLeft = *std::next(data[ev].begin(), left);
+    int dataRight = *std::next(data[ev].begin(), right);
 
 	return lerp(point - left, dataLeft, dataRight);
 }
@@ -39,7 +40,15 @@ double percentile(double q)
 void sig_handler(int sig)
 {
     if (data.size())
-        std::cout << "min=" << *(data.begin()) << " 50%=" << percentile(0.5) << " 90%=" << percentile(0.9) << " 99%=" << percentile(0.99) << " 99.9%=" << percentile(0.999) << "\n";
+    {
+        std::lock_guard<std::recursive_mutex> lock(w_lock);
+        for (const auto& pair: data)
+            std::cout << pair.first << " min=" << *(data[pair.first].begin()) <<
+                                                                  " 50%=" << percentile(pair.first, 0.5) <<
+                                                                  " 90%=" << percentile(pair.first, 0.9) <<
+                                                                  " 99%=" << percentile(pair.first, 0.99) <<
+                                                                  " 99.9%=" << percentile(pair.first, 0.999) << "\n";
+    }
 }
 
 int main()
@@ -99,6 +108,7 @@ int main()
 void readfd(int fd)
 {
     char numbuffer[10];
+    std::string strbuffer;
     ssize_t bytes_read;
     char buffer[buff_size];
     int tabs = 0;
@@ -119,12 +129,17 @@ void readfd(int fd)
                 int val = atoi(numbuffer);
                 if (val)
                 {
-                    std::lock_guard<std::mutex> lock(w_lock);
-                    data.insert(atoi(numbuffer));
+                    std::lock_guard<std::recursive_mutex> lock(w_lock);
+                    data[strbuffer].insert(val);
                 }
+                strbuffer.clear();
                 tabs = 0;
                 i = 0;
                 continue;
+            }
+            if (tabs == 1)
+            {
+                strbuffer.push_back(buffer[j]);
             }
             if (tabs == 15)
             {
