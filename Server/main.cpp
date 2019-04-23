@@ -5,46 +5,107 @@
 #include <set>
 #include <algorithm>
 #include <cmath>
+#include <sys/socket.h>
+#include <stdio.h>
+#include <string.h>
+#include <arpa/inet.h>
+#include <thread>
+#include <signal.h>
+#include <mutex>
+
+std::mutex w_lock;
 
 const int buff_size = 4096;
+static std::multiset<int> data;
 
+void readfd(int fd);
 double lerp(double t, double v0, double v1)
 {
 	return (1 - t)*v0 + t*v1;
 }
 
-double percentile(const std::multiset<int> &s, double q)
+double percentile(double q)
 {
-	double point = lerp(q, -0.5, s.size() - 0.5);
+    double point = lerp(q, -0.5, data.size() - 0.5);
     int left = std::max(int(std::floor(point)), 0);
-    int right = std::min(int(std::ceil(point)), int(s.size() - 1));
+    int right = std::min(int(std::ceil(point)), int(data.size() - 1));
 
-	int dataLeft = *std::next(s.begin(), left);
-	int dataRight = *std::next(s.begin(), right);
+    int dataLeft = *std::next(data.begin(), left);
+    int dataRight = *std::next(data.begin(), right);
 
 	return lerp(point - left, dataLeft, dataRight);
 }
 
+void sig_handler(int sig)
+{
+    if (data.size())
+        std::cout << "min=" << *(data.begin()) << " 50%=" << percentile(0.5) << " 90%=" << percentile(0.9) << " 99%=" << percentile(0.99) << " 99.9%=" << percentile(0.999) << "\n";
+}
+
 int main()
 {
-	int fd;
+    //signal stuff
+    struct sigaction act;
+    bzero(&act, sizeof (act));
+    act.sa_handler = sig_handler;
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    act.sa_mask = set;
+    sigaction(SIGUSR1, &act, nullptr);
 
-	if ((fd = open("input_file.txt", O_RDONLY)) == -1)
-	{
-		std::cerr << "File opening error: " << strerror(errno) << "\n";
-                exit(1);
-	}
+    //server stuff
+    int listenfd, connfd;
+    struct sockaddr_in servaddr;
 
+    if ((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+    {
+        perror("socket() error");
+        exit(1);
+    }
+    bzero(&servaddr, sizeof(servaddr));
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    servaddr.sin_port = htons(54000);
+    const int opt = 1;
+    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof (opt));
+
+    if (bind(listenfd, (sockaddr*)&servaddr, sizeof(servaddr)) == -1)
+    {
+        perror("bind() error");
+        exit(1);
+    }
+
+    if (listen(listenfd, SOMAXCONN) == -1)
+    {
+        perror("listen() error");
+        exit(1);
+    }
+
+    for (;;)
+    {
+        if ((connfd = accept(listenfd, nullptr, nullptr)) == -1)
+        {
+            if (errno == EINTR)
+                continue;
+            perror("accept() error");
+            exit(1);
+        }
+        std::thread thread(readfd, connfd);
+        thread.detach();
+    }
+}
+
+void readfd(int fd)
+{
     char numbuffer[10];
     ssize_t bytes_read;
     char buffer[buff_size];
-	int tabs = 0;
-	int i = 0;
-
-	std::multiset<int> data;
+    int tabs = 0;
+    int i = 0;
 
     while ((bytes_read = read(fd, buffer, buff_size)) > 0)
-	{
+    {
         for (int j = 0; j < bytes_read; ++j)
         {
             if (buffer[j] == '\t')
@@ -57,7 +118,10 @@ int main()
                 numbuffer[i] = '\0';
                 int val = atoi(numbuffer);
                 if (val)
+                {
+                    std::lock_guard<std::mutex> lock(w_lock);
                     data.insert(atoi(numbuffer));
+                }
                 tabs = 0;
                 i = 0;
                 continue;
@@ -68,17 +132,11 @@ int main()
                 ++i;
             }
         }
-	}
+    }
 
-	if (close(fd) < 0)
-	{
-		std::cerr << "File closing error: " << strerror(errno) << "\n";
-		exit(1);
-	};
-
-	std::cout << "min=" << *(data.begin()) << " 50%=" << percentile(data, 0.5) << " 90%=" << percentile(data, 0.9) << " 99%=" << percentile(data, 0.99) << " 99.9%=" << percentile(data, 0.999) << "\n";
-
-//	data.clear();
-
-//	system("PAUSE");
+    if (close(fd) == -1)
+    {
+        perror("close() error");
+        exit(1);
+    }
 }
