@@ -1,4 +1,5 @@
 #include <iostream>
+#include <fstream>
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -14,45 +15,83 @@
 #include <signal.h>
 #include <mutex>
 
-std::recursive_mutex w_lock;
+static std::recursive_mutex w_lock;
 
 const int buff_size = 4096;
 static std::map< std::string, std::multiset<int> > data;
 
 void readfd(int fd);
-double lerp(double t, double v0, double v1)
-{
-	return (1 - t)*v0 + t*v1;
-}
 
 double percentile(std::string ev, double q)
 {
-    double point = lerp(q, -0.5, data[ev].size() - 0.5);
-    int left = std::max(int(std::floor(point)), 0);
-    int right = std::min(int(std::ceil(point)), int(data[ev].size() - 1));
-
-    int dataLeft = *std::next(data[ev].begin(), left);
-    int dataRight = *std::next(data[ev].begin(), right);
-
-	return lerp(point - left, dataLeft, dataRight);
+    double rank, rankInt, rankFrac;
+    rank = q * (data[ev].size() - 1);
+    rankFrac = modf(rank, &rankInt);
+    int elValue = *std::next(data[ev].begin(), (int)rankInt);
+    int elPlusOneValue = *std::next(data[ev].begin(), (int)rankInt + 1);
+    return elValue + rankFrac * (elPlusOneValue - elValue);
 }
 
-void sig_handler(int sig)
+void sig_handler(int)
 {
     if (data.size())
     {
+        std::ofstream out("output.txt");
+        std::streambuf *coutbuf = std::cout.rdbuf();
+        std::cout.rdbuf(out.rdbuf());
+
         std::lock_guard<std::recursive_mutex> lock(w_lock);
         for (const auto& pair: data)
-            std::cout << pair.first << " min=" << *(data[pair.first].begin()) <<
-                                                                  " 50%=" << percentile(pair.first, 0.5) <<
-                                                                  " 90%=" << percentile(pair.first, 0.9) <<
-                                                                  " 99%=" << percentile(pair.first, 0.99) <<
-                                                                  " 99.9%=" << percentile(pair.first, 0.999) << "\n";
+        {
+            std::string ev = pair.first;
+            std::cout << ev << " min=" << *(data[pair.first].begin()) <<
+                                                                  " 50%=" << percentile(ev, 0.5) <<
+                                                                  " 90%=" << percentile(ev, 0.9) <<
+                                                                  " 99%=" << percentile(ev, 0.99) <<
+                                                                  " 99.9%=" << percentile(ev, 0.999) << "\n";
+
+            std::cout << "ExecTime\tTransNo\tWeight,%\tPercent\n";
+            unsigned int s = 0;
+            double p = 0;
+            int i;
+            for (i = *(data[ev].begin()); i <= *(std::prev(data[ev].end())); ++i)
+            {
+                s += data[ev].count(i);
+                if (i % 5 == 0)
+                {
+                    p += (double)s / data[ev].size();
+                    std::cout << i << "\t" << s << "\t" << (double)s*100 / data[ev].size() << "\t" << p*100 << "\n";
+                    s = 0;
+                }
+            }
+            if (i % 5) //still have some data
+            {
+                while (i % 5)
+                    ++i;
+                std::cout << i << "\t" << s << "\t" << (double)s*100 / data[ev].size() << "\t" << p*100 << "\n";
+            }
+
+            std::cout.rdbuf(coutbuf);
+        }
     }
+    else
+        std::cout << "No data to work with\n";
 }
 
-int main()
+int main(int argc, char *argv[])
 {
+    //first check whether file is provided
+    int filefd;
+    if (argc == 2) //we have one argument
+    {
+        if ((filefd = open(argv[1], O_RDONLY)) == -1)
+            perror("open() error"); //probably got wrong file path
+        else
+        {
+            std::thread thread(readfd, filefd);
+            thread.detach();
+        }
+    }
     //signal stuff
     struct sigaction act;
     bzero(&act, sizeof (act));
