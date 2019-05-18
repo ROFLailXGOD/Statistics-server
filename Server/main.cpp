@@ -13,7 +13,6 @@
 #include <cmath>
 #include <sys/socket.h>
 #include <stdio.h>
-#include <string.h>
 #include <arpa/inet.h>
 #include <thread>
 #include <signal.h>
@@ -25,6 +24,7 @@ const int buff_size = 4096;
 static std::map< std::string, std::map<int, int> > data;
 
 static char *input;
+static char *fifo;
 static char *output;
 
 void udpconn();
@@ -91,9 +91,8 @@ void sig_handler(int)
 int main(int argc, char *argv[])
 {
     //command line arguments
-    int fifoflag = 0;
     int opt;
-    while ((opt = getopt(argc, argv, "i:fo:")) != -1)
+    while ((opt = getopt(argc, argv, "i:f:o:")) != -1)
     {
         switch (opt)
         {
@@ -101,13 +100,13 @@ int main(int argc, char *argv[])
             input = optarg;
             break;
         case 'f':
-            fifoflag = 1;
+            fifo = optarg;
             break;
         case 'o':
             output = optarg;
             break;
         default:
-            std::cerr << "Usage: " << argv[0] << " [-i] input_file [-f] [-o] output_file\n";
+            std::cerr << "Usage: " << argv[0] << " [-i] input_file [-f] fifo [-o] output_file\n";
             exit(1);
         }
     }
@@ -115,18 +114,26 @@ int main(int argc, char *argv[])
     if (input)
     {
         int filefd;
-        if (fifoflag)
+        if ((filefd = open(input, O_RDONLY)) == -1)
+            perror("open() error"); //probably got wrong file path
+        else
         {
-            if (mkfifo(input, O_RDONLY) == -1)
+            std::thread thread(readfd, filefd);
+            thread.detach();
+        }
+    }
+    if (fifo)
+    {
+        if (mkfifo(fifo, 0666) == -1)
+        {
+            if (errno != EEXIST)
             {
-                if (errno != EEXIST)
-                {
-                    perror("mkfifo() error");
-                    exit(1);
-                }
+                perror("mkfifo() error");
+                exit(1);
             }
         }
-        if ((filefd = open(input, O_RDONLY)) == -1)
+        int filefd;
+        if ((filefd = open(fifo, O_RDONLY)) == -1)
             perror("open() error"); //probably got wrong file path
         else
         {
