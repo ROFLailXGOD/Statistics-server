@@ -17,18 +17,19 @@
 #include <thread>
 #include <signal.h>
 #include <mutex>
+#include <chrono>
 
 static std::recursive_mutex w_lock;
 
 const int buff_size = 4096;
-static std::map< std::string, std::map<int, int> > data;
+static std::map< std::string, std::map<int, unsigned long> > data;
 
 static char *input;
 static char *fifo;
 static char *output;
 
 void udpconn();
-void readfd(int fd);
+void readfd(int fd, int fifoflag);
 double percentile(std::string ev, double q);
 
 void sig_handler(int)
@@ -45,10 +46,11 @@ void sig_handler(int)
         }
 
         std::lock_guard<std::recursive_mutex> lock(w_lock);
+        auto start = std::chrono::high_resolution_clock::now();
         for (const auto& pair: data)
         {
             std::string ev = pair.first;
-            const unsigned long size = std::accumulate(std::begin(data[ev]), std::end(data[ev]), 0,
+            const unsigned long size = std::accumulate(std::begin(data[ev]), std::end(data[ev]), (unsigned long)0,
                                                        [](const unsigned long previous, const auto& element)
                                                        { return previous + element.second; });
             std::cout << ev << " min=" << data[pair.first].begin()->first <<
@@ -58,7 +60,7 @@ void sig_handler(int)
                                                                   " 99.9%=" << percentile(ev, 0.999) << "\n";
 
             std::cout << "ExecTime\tTransNo\tWeight,%\tPercent\n";
-            unsigned int s = 0;
+            unsigned long s = 0;
             unsigned long p = 0;
             int i;
             for (i = data[ev].begin()->first; i <= std::prev(data[ev].end())->first; ++i)
@@ -82,6 +84,9 @@ void sig_handler(int)
         }
         if (output)
             std::cout.rdbuf(coutbuf);
+        auto finish = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> elapsed = finish - start;
+        std::cout << elapsed.count() << "\n";
 
     }
     else
@@ -118,7 +123,7 @@ int main(int argc, char *argv[])
             perror("open() error"); //probably got wrong file path
         else
         {
-            std::thread thread(readfd, filefd);
+            std::thread thread(readfd, filefd, 0);
             thread.detach();
         }
     }
@@ -137,7 +142,7 @@ int main(int argc, char *argv[])
             perror("open() error"); //probably got wrong file path
         else
         {
-            std::thread thread(readfd, filefd);
+            std::thread thread(readfd, filefd, 1);
             thread.detach();
         }
     }
@@ -193,7 +198,7 @@ int main(int argc, char *argv[])
             perror("accept() error");
             exit(1);
         }
-        std::thread thread(readfd, connfd);
+        std::thread thread(readfd, connfd, 0);
         thread.detach();
     }
 }
@@ -265,7 +270,7 @@ void udpconn()
     }
 }
 
-void readfd(int fd)
+void readfd(int fd, int fifoflag)
 {
     char numbuffer[10];
     std::string strbuffer;
@@ -274,7 +279,8 @@ void readfd(int fd)
     int tabs = 0;
     int i = 0;
 
-    while ((bytes_read = read(fd, buffer, buff_size)) > 0)
+    auto start = std::chrono::high_resolution_clock::now();
+    while (((bytes_read = read(fd, buffer, buff_size)) > 0) || fifoflag)
     {
         for (int j = 0; j < bytes_read; ++j)
         {
@@ -308,6 +314,9 @@ void readfd(int fd)
             }
         }
     }
+    auto finish = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = finish - start;
+//    std::cout << elapsed.count() << "\n";
 
     if (close(fd) == -1)
     {
@@ -319,13 +328,13 @@ void readfd(int fd)
 double percentile(std::string ev, double q)
 {
     double rank, rankInt, rankFrac;
-    const unsigned long size = std::accumulate(std::begin(data[ev]), std::end(data[ev]), 0,
+    const unsigned long size = std::accumulate(std::begin(data[ev]), std::end(data[ev]), (unsigned long)0,
                                                [](const unsigned long previous, const auto& element)
                                                { return previous + element.second; });
     rank = q * (size - 1) + 1;
     rankFrac = modf(rank, &rankInt);
     unsigned long sum = 0;
-    std::map<int, int>::iterator it;
+    std::map<int, unsigned long>::iterator it;
     for (it = data[ev].begin(); sum < (unsigned long)rankInt; ++it)
     {
         sum += it->second;
