@@ -9,6 +9,8 @@
 #include <unistd.h>
 #include <numeric>
 #include <map>
+#include <vector>
+#include <iterator>
 #include <algorithm>
 #include <cmath>
 #include <sys/socket.h>
@@ -22,6 +24,7 @@
 static std::recursive_mutex w_lock;
 
 const int buff_size = 4096;
+static bool sh = false;
 static std::map< std::string, std::map<int, unsigned long> > data;
 
 static char *input;
@@ -31,6 +34,35 @@ static char *output;
 void udpconn();
 void readfd(int fd, int fifoflag);
 double percentile(std::string ev, double q);
+double arithmetic_mean(std::string ev);
+double median(std::string ev);
+double standard_deviation(std::string ev, int n = 1);
+double variance(std::string ev);
+double range(std::string ev);
+double skewness(std::string ev);
+double kurtosis(std::string ev);
+
+std::string center(const std::string s, const int w)
+{
+    std::stringstream ss, spaces;
+    int padding = w - s.size();                 // count excess room to pad
+    for(int i=0; i<padding/2; ++i)
+        spaces << " ";
+    ss << spaces.str() << s << spaces.str();    // format with padding
+    if(padding>0 && padding%2!=0)               // if odd #, add 1 space
+        ss << " ";
+    return ss.str();
+}
+
+std::string prd(const double x, const int decDigits, const int width) {
+    std::stringstream ss;
+    ss << std::fixed << std::right;
+    ss.fill(' ');        // fill space around displayed #
+    ss.width(width);     // set  width around displayed #
+    ss.precision(decDigits); // set # places after decimal
+    ss << x;
+    return ss.str();
+}
 
 void sig_handler(int)
 {
@@ -58,8 +90,22 @@ void sig_handler(int)
                                                                   " 90%=" << percentile(ev, 0.9) <<
                                                                   " 99%=" << percentile(ev, 0.99) <<
                                                                   " 99.9%=" << percentile(ev, 0.999) << "\n";
+            if (sh == false)
+            {
+                std::cout << "Arithmetic mean is " << arithmetic_mean(ev) << "\n";
+                std::cout << "Median is " << median(ev) << "\n";
+                std::cout << "Standard deviation is " << standard_deviation(ev) << "\n";
+                std::cout << "Variance is " << variance(ev) << "\n";
+                std::cout << "Range is " << range(ev) << "\n";
+                std::cout << "Skewness is " << skewness(ev) << "\n";
+                std::cout << "Kurtosis is " << kurtosis(ev) << "\n";
+            }
 
-            std::cout << "ExecTime\tTransNo\tWeight,%\tPercent\n";
+            std::cout << "\n";
+
+            std::cout << center("ExecTime", 10) << " | " << center("TransNo", 10) << " | " << center("Weight,%", 10) << " | " << center("Percent", 10) << "\n";
+            std::cout << std::string(10*4 + 3*3, '-') << "\n";
+
             unsigned long s = 0;
             unsigned long p = 0;
             int i;
@@ -70,7 +116,7 @@ void sig_handler(int)
                 if (i % 5 == 0)
                 {
                     p += s;
-                    std::cout << i << "\t" << s << "\t" << s*100.0 / size << "\t" << p*100.0 / size << "\n";
+                    std::cout << prd(i, 0, 10) << " | " << prd(s, 0, 10) << " | " << prd(s*100.0/size, 4, 10) << " | " << prd(p*100.0/size, 4, 10) << "\n";
                     s = 0;
                 }
             }
@@ -79,8 +125,9 @@ void sig_handler(int)
                 while (i % 5)
                     ++i;
                 p += s;
-                std::cout << i << "\t" << s << "\t" << s*100.0 / size << "\t" << p*100.0 / size << "\n";
+                std::cout << prd(i, 0, 10) << " | " << prd(s, 0, 10) << " | " << prd(s*100.0/size, 4, 10) << " | " << prd(p*100.0/size, 4, 10) << "\n";
             }
+            std::cout << "\n";
         }
         if (output)
             std::cout.rdbuf(coutbuf);
@@ -97,7 +144,7 @@ int main(int argc, char *argv[])
 {
     //command line arguments
     int opt;
-    while ((opt = getopt(argc, argv, "i:f:o:")) != -1)
+    while ((opt = getopt(argc, argv, "i:f:o:s")) != -1)
     {
         switch (opt)
         {
@@ -110,8 +157,11 @@ int main(int argc, char *argv[])
         case 'o':
             output = optarg;
             break;
+        case 's':
+            sh = true;
+            break;
         default:
-            std::cerr << "Usage: " << argv[0] << " [-i] input_file [-f] fifo [-o] output_file\n";
+            std::cerr << "Usage: " << argv[0] << " [-i] input_file [-f] fifo [-o] output_file [-s]\n";
             exit(1);
         }
     }
@@ -246,19 +296,48 @@ void udpconn()
         std::string msg;
         if (bytes)
         {
-            std::string ev(buff, bytes-1);
-            if (data.find(ev) == data.end())
+            std::string input(buff, bytes-1);
+            std::istringstream iss(input);
+            std::vector<std::string> events(std::istream_iterator<std::string>{iss},
+                                             std::istream_iterator<std::string>());
+            for (unsigned long i = 0; i < events.size(); ++i)
             {
-                msg = "Event " + ev + " not found\n";
-            }
-            else
-            {
-                std::lock_guard<std::recursive_mutex> lock(w_lock);
-                msg = ev + " min=" + to_string(data[ev].begin()->first) +
-                               " 50%=" + to_string(percentile(ev, 0.5)) +
-                               " 90%=" + to_string(percentile(ev, 0.9)) +
-                               " 99%=" + to_string(percentile(ev, 0.99)) +
-                               " 99.9%=" + to_string(percentile(ev, 0.999)) + "\n";
+                if (data.find(events[i]) == data.end())
+                {
+                    msg += "Event " + events[i] + " is not found. Available events:\n";
+                    if (data.size())
+                    {
+                        std::lock_guard<std::recursive_mutex> lock(w_lock);
+                        for (const auto& pair: data)
+                        {
+                            msg += " • " + pair.first + "\n";
+                        }
+                    }
+                    else
+                    {
+                        msg += "no events are available\n";
+                    }
+                }
+                else
+                {
+                    std::lock_guard<std::recursive_mutex> lock(w_lock);
+                    msg += events[i] + " min=" + to_string(data[events[i]].begin()->first) +
+                                   " 50%=" + to_string(percentile(events[i], 0.5)) +
+                                   " 90%=" + to_string(percentile(events[i], 0.9)) +
+                                   " 99%=" + to_string(percentile(events[i], 0.99)) +
+                                   " 99.9%=" + to_string(percentile(events[i], 0.999)) + "\n";
+                    if (sh == false)
+                    {
+                        msg += "Arithmetic mean is " + to_string(arithmetic_mean(events[i])) + "\n";
+                        msg += "Median is " + to_string(median(events[i])) + "\n";
+                        msg += "Standard deviation is " + to_string(standard_deviation(events[i])) + "\n";
+                        msg += "Variance is " + to_string(variance(events[i])) + "\n";
+                        msg += "Range is " + to_string(range(events[i])) + "\n";
+                        msg += "Skewness is " + to_string(skewness(events[i])) + "\n";
+                        msg += "Kurtosis is " + to_string(kurtosis(events[i])) + "\n";
+                    }
+                    msg += "\n";
+                }
             }
         }
 
@@ -351,4 +430,107 @@ double percentile(std::string ev, double q)
         elPlusOneValue = std::prev(it)->first;
     }
     return elValue + rankFrac * (elPlusOneValue - elValue);
+}
+
+double arithmetic_mean(std::string ev)
+{
+    const unsigned long size = std::accumulate(std::begin(data[ev]), std::end(data[ev]), (unsigned long)0,
+                                               [](const unsigned long previous, const auto& element)
+                                               { return previous + element.second; });
+    int s = 0;
+    std::map<int, unsigned long>::iterator it;
+    for (it = data[ev].begin(); it != data[ev].end(); ++it)
+    {
+        s += it->first*it->second;
+    }
+    return s*1./size;
+}
+
+double median(std::string ev)
+{
+    const unsigned long size = std::accumulate(std::begin(data[ev]), std::end(data[ev]), (unsigned long)0,
+                                               [](const unsigned long previous, const auto& element)
+                                               { return previous + element.second; });
+    int rank = size / 2;
+    int sum = 0;
+    std::map<int, unsigned long>::iterator it;
+    for (it = data[ev].begin(); sum < (unsigned long)rank; ++it)
+    {
+        sum += it->second;
+    }
+
+    if (rank == sum)
+    {
+        if (size % 2)
+        {
+            return it->first;
+        }
+        else
+        {
+            return (std::prev(it)->first + it->first)/2.;
+        }
+    }
+    else
+    {
+        return std::prev(it)->first;
+    }
+}
+
+double standard_deviation(std::string ev, int n)
+{
+    double mean = arithmetic_mean(ev);
+    double sum = 0;
+    std::map<int, unsigned long>::iterator it;
+    for (it = data[ev].begin(); it != data[ev].end(); ++it)
+    {
+        sum += (it->first-mean)*(it->first-mean)*it->second;
+    }
+    const unsigned long size = std::accumulate(std::begin(data[ev]), std::end(data[ev]), (unsigned long)0,
+                                               [](const unsigned long previous, const auto& element)
+                                               { return previous + element.second; });
+    sum /= size-n;
+    return sqrt(sum);
+}
+
+double variance(std::string ev)
+{
+    return standard_deviation(ev)*standard_deviation(ev);
+}
+
+double range(std::string ev)
+{
+    return std::prev(data[ev].end())->first - data[ev].begin()->first;
+}
+
+double skewness(std::string ev)
+{
+    double mean = arithmetic_mean(ev);
+    double sum = 0;
+    std::map<int, unsigned long>::iterator it;
+    for (it = data[ev].begin(); it != data[ev].end(); ++it)
+    {
+        sum += (it->first-mean)*(it->first-mean)*(it->first-mean)*it->second;
+    }
+    const unsigned long size = std::accumulate(std::begin(data[ev]), std::end(data[ev]), (unsigned long)0,
+                                               [](const unsigned long previous, const auto& element)
+                                               { return previous + element.second; });
+    sum = sum*size/((size-1)*(size-2));
+    return sum/(standard_deviation(ev)*standard_deviation(ev)*standard_deviation(ev));
+}
+
+double kurtosis(std::string ev)
+{
+    double mean = arithmetic_mean(ev);
+    double sum = 0;
+    std::map<int, unsigned long>::iterator it;
+    for (it = data[ev].begin(); it != data[ev].end(); ++it)
+    {
+        sum += (it->first-mean)*(it->first-mean)*(it->first-mean)*(it->first-mean)*it->second;
+    }
+    const unsigned long size = std::accumulate(std::begin(data[ev]), std::end(data[ev]), (unsigned long)0,
+                                               [](const unsigned long previous, const auto& element)
+                                               { return previous + element.second; });
+    sum = sum*size*(size+1)/((size-1)*(size-2)*(size-3));
+    sum /= standard_deviation(ev)*standard_deviation(ev)*standard_deviation(ev)*standard_deviation(ev);
+    return sum - 3.*(size-1)*(size-1)/((size-2)*(size-3));
 }
